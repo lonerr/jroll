@@ -1,0 +1,391 @@
+#!/usr/bin/env perl
+
+=head1 NAME
+
+jroll - Binary projects deploy (jails & ZFS based)
+
+SYNOPSIS
+
+jroll [ options ] project
+
+=cut
+
+use strict;
+use warnings;
+use utf8;
+
+use FindBin;
+use Getopt::Long qw( :config no_auto_abbrev bundling require_order );
+use LWP::UserAgent;
+use POSIX qw( strftime );
+use YAML::XS qw( Load );
+
+# command line options & config loaded
+my ( %opts,$conf );
+
+# kind of logging
+sub now   { strftime '%Y-%m-%d %H:%M:%S',localtime }
+sub debug { warn &now . " [debug] @_\n" if $opts{ verbose } }
+sub info  { warn &now . "  [info] @_\n" }
+sub fatal { die  &now . " [error] @_\n" }
+
+# get full jail info
+sub jinfo(@);
+
+# remote command execution
+sub rcmd($$);
+
+# actions
+sub cleanup();
+sub deploy();
+sub help();
+
+my %cmds = (
+	cleanup => \&cleanup,
+	help    => \&help,
+	deploy  => \&deploy,
+);
+
+# just a main ;)
+sub main {
+	# parse common command line switches
+	GetOptions(\%opts, qw(
+		config|c=s
+		verbose|v
+	)) or goto &Help::main;
+
+	# reasonable defaults
+	$opts{ config } //= $FindBin::Bin . '/../etc/jroll.yml';
+
+	# config loading
+	{
+		open my $fd, '<', $opts{ config } or
+			fatal "can't found config file: $opts{ config }";
+		my $yml = do { local $/ = <$fd> } or
+			fatal "can't load config file: $opts{ config }";
+		$conf = Load $yml or
+			fatal "can't parse config file: $opts{ config }";
+		debug "config loaded: $opts{ config }";
+	}
+
+	# action argument required
+	my $do = shift @ARGV or
+		goto &Help::main;
+
+	# try to dispatch
+	my @do = grep { /^$do/ } keys %cmds;
+	goto &Help::main
+		unless @do==1;
+	goto &{ shift @do };
+}
+
+sub help() {
+	if ( my $do = shift @ARGV ) {
+		my @do = grep { /^$do/ } keys %cmds;
+		goto &{ 'Help::' . $do[0] }
+			if @do == 1;
+	}
+	goto &Help::main;
+}
+
+sub cleanup() {
+	my $start = time;
+
+	my %copts;
+	GetOptions(\%copts, qw(
+		dry-run|n
+		keep|k=i
+		group|g=s
+	)) or goto &Help::main;
+
+	# single argument required (project name)
+	my $pname = shift @ARGV or die &Help::cleanup;
+	goto &Help::cleanup if @ARGV;
+
+	info "dry-run process (read only)"
+		if $copts{'dry-run'};
+
+	# get project info
+	my $proj = $conf->{ projects }{ $pname } or
+		fatal "no project found: $pname";
+
+	# all members
+	my @all = sort map { @{ $proj->{ groups }{ $_ } } }
+		keys %{ $proj->{ groups } };
+
+	my $group = $copts{ group };
+
+	my $keep = $copts{ keep } // $proj->{ keep };
+	fatal "no 'keep' setting found, nothing to do"
+		unless $keep && $keep =~ /^\d+$/;
+	fatal "dangerous 'keep' settings '$keep' (3 minimum)"
+		unless $keep > 2;
+
+	my $mmbs = $group ? do {
+		$proj->{ groups }{ $group } or
+			fatal "no group '$group' defined for project";
+	} : \@all;
+
+	info "work on project: $pname (" . ( $group // 'all groups' ) . ")";
+
+	# super info
+	info "discovering super info";
+	my $super = jinfo split '@',$proj->{ super };
+
+	# all suitable snapshots
+	my %every;
+	for my $m ( @all ) {
+		info "discovering member info ($m)";
+		my $inf = jinfo split('@',$m), matched => 0;
+		$every{ $_ }++ for @{ $inf->{ snapshots } };
+	}
+
+	# common snapshots
+	my @common = grep { $every{ $_ } == @all } keys %every;
+	info "found " . scalar( @common ) . " common snapshots";
+
+	fatal "TODO: real cleanup";
+}
+
+sub deploy() {
+	my $start = time;
+
+	my %copts;
+	GetOptions(\%copts, qw(
+		dry-run|n
+		group|g=s
+	)) or goto &Help::main;
+
+	# single argument required (project name)
+	my $pname = shift @ARGV or die &Help::deploy;
+	goto &Help::deploy if @ARGV;
+
+	info "dry-run process (read only)"
+		if $copts{'dry-run'};
+
+	# get project info
+	my $proj = $conf->{ projects }{ $pname } or
+		fatal "no project found: $pname";
+
+	my $group = $copts{ group } // $proj->{ inactive };
+	if ( $group =~ m{^http://} ) {
+		info "detecting inactive group via http";
+		my $ua = LWP::UserAgent->new( timeout => 10 );
+		my $rs = $ua->get( $group );
+		fatal "can't detect inactive group: " . $rs->status_line
+			unless $rs->is_success;
+		$group = $rs->content;
+	}
+	my $mmbs = $proj->{ groups }{ $group } or
+		fatal "no group '$group' defined for project";
+
+	info "work on project: $pname ($group)";
+	
+	# super info
+	info "discovering super info";
+	my $super = jinfo split '@',$proj->{ super };
+
+	# destinations info
+	my %trts;
+	for ( @$mmbs ) {
+		info "discovering targets info ($_)";
+		$trts{ $_ } = jinfo split '@',$_;
+	}
+
+	info "searching for latest common snapshot";
+	my $base;
+	for my $cnd ( @{ $super->{ snapshots } } ) {
+		my $fnd = 0;
+		for ( @$mmbs ) {
+			$fnd++ if $trts{ $_ }->{ mss }{ $cnd };
+		}
+		next unless $fnd == @$mmbs;
+
+		$base = $cnd;
+		info "selected base snapshot: $base";
+		last;
+	}
+	fatal "no one common snapshot found"
+		unless $base;
+
+	# name pattern does matter for cleanup process!
+	my $last = 'jroll.' . strftime '%Y-%m-%d.%H:%M:%S',localtime;
+	info "creating super snapshot: $last"; 
+	rcmd $proj->{ super } => "sudo zfs snapshot $super->{ rootfs }\@$last"
+		unless $copts{'dry-run'};
+
+	my $dump = "/tmp/$FindBin::Script." . getpwuid($<) . ".$$.$pname";
+	info "dumping super delta into $dump"; 
+	rcmd $proj->{ super } => "sudo zfs send -I \@$base $super->{ rootfs }\@$last > $dump"
+		unless $copts{'dry-run'};
+
+	unless ( $copts{'dry-run'} ) {
+		my ( $size ) = rcmd $proj->{ super } => "stat -f%z $dump";
+		info "dumped $size bytes";
+	}
+
+	for ( @$mmbs ) {
+		info "applying delta onto $_";
+
+		my ( $jail,$host ) = split '@',$_;
+		debug "transferring dump to $host";
+		rcmd $proj->{ super } => "scp -o StrictHostKeyChecking=no $dump $host:$dump"
+			unless $copts{'dry-run'};
+
+		debug "stopping $jail\@$host";
+		rcmd $host => "sudo ezjail-admin stop $jail"
+			unless $copts{'dry-run'};
+
+		debug "rollback $jail\@$host to \@$base";
+		rcmd $host => "sudo zfs rollback -r $trts{ $_ }{ rootfs }\@$base"
+			unless $copts{'dry-run'};
+
+		debug "restoring $jail\@$host to \@$last";
+		rcmd $host => "sudo zfs recv $trts{ $_ }{ rootfs } < $dump"
+			unless $copts{'dry-run'};
+
+		debug "starting $jail\@$host";
+		rcmd $host => "sudo ezjail-admin start $jail"
+			unless $copts{'dry-run'};
+
+		rcmd $host => "rm -f $dump"
+			unless $copts{'dry-run'};
+		debug "dump removed at $host";
+	}
+
+	rcmd $proj->{ super } => "rm -f $dump"
+		unless $copts{'dry-run'};
+	debug "super dump removed";
+
+	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
+}
+
+sub jinfo(@) {
+	my ( $jail,$host,%kws ) = @_;
+
+	# prepare info structure
+	my $inf;
+
+	# sanitize (like ezjail does)
+	(my $name = $jail) =~ s/[^[:alnum:]]/_/g;
+
+	# get ezjail options
+	for ( rcmd $host => "cat /usr/local/etc/ezjail/$name" ) {
+		my ( $k,$v ) = /^\s*export\s+jail_${ name }_(\w+)="([^"]+)"\s*$/ or
+			next;
+		$inf->{ $k } = $v;
+	}
+	debug "loaded jail settings for $jail\@$host";
+
+	# root directory required
+	fatal "can't found root directory for $jail\@$host"
+		unless $inf->{ rootdir };
+
+	# get mounted ZFS partitions
+	for ( rcmd $host => 'mount -ptzfs' ) {
+		my ( $fs,$mp ) = split ' ';
+		next unless $mp eq $inf->{ rootdir };
+		$inf->{ rootfs } = $fs; last;
+	}
+	debug "analyzed mount points at $host";
+
+	# rootfs required
+	fatal "can't found file system for $jail\@$host"
+		unless $inf->{ rootfs };
+
+	# get snapshots for rootfs
+	for ( reverse rcmd $host => "zfs list -Hrt snapshot -oname $inf->{ rootfs }" ) {
+		push @{ $inf->{ snapshots } }, ( split '@',$_ )[1];
+	}
+
+	# remove not suitable snapshots (if requested)
+	$inf->{ snapshots } = [ grep { /^jail\.\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/ } @{ $inf->{ snapshots } } ]
+		if $kws{ matched };
+
+	# prepare snapshots mapping
+	$inf->{ mss } = { map { $_ => $_ } @{ $inf->{ snapshots } } };
+	debug "got snapshots for $jail\@$host";
+
+	$inf;
+}
+
+sub rcmd($$) {
+	my ( $host,$cmd ) = @_;
+
+	# rcmd accepts host:foo as valid argument too
+	$host =~ s/^.*\@//;
+
+	chomp( my @out = qx( ssh -o StrictHostKeyChecking=no $host '$cmd' ) );
+	fatal qq(can't execute remote: "@out") if $?;
+	@out;
+}
+
+
+# go!
+&main;
+
+
+#
+# Dedicated help namespace
+#
+package Help;
+
+# generic help
+sub main {
+	die <<EOM . join( "\n", map { ' 'x4 . $_ } sort keys %cmds ) . "\n\n";
+
+Usage: $FindBin::Script [options] <command> [command options] [command arguments]
+
+Help:  $FindBin::Script help <command>
+
+Options:
+    -c, --config=FILE  config file to load
+    -v, --verbose      more verbose output
+
+Commands:
+EOM
+}
+
+# help on help :)
+sub help {
+	die <<EOM . join( "\n", map { ' 'x4 . $_ } sort keys %cmds ) . "\n\n";
+
+Help: brief overview about command options and arguments
+
+Usage: help <command>
+
+Available commands:
+EOM
+}
+
+# cleanup help
+sub cleanup {
+	die <<EOM;
+
+Cleanup: discard stale common jroll snapshots for group
+
+Usage:  cleanup [options] project
+
+Options:
+    -g, --group=NAME   explicitly set group to cleanup
+                       by default all groups will affected
+    -k, --keep=NUM     keep NUM last common snapshots
+    -n, --dry-run      show what would have been done
+
+EOM
+}
+
+# deploy help
+sub deploy {
+	die <<EOM;
+
+Deploy: apply super changes to group of instances
+
+Usage: deploy [options] project
+
+Options:
+    -g, --group=NAME   explicitly set group to deploy
+    -n, --dry-run      show what would have been done
+
+EOM
+}

@@ -1,0 +1,14 @@
+---
+projects:
+
+    foo:
+        inactive: http://foo.local/jset
+        super: super.foo@host.local
+        keep: 10
+        groups:
+            bolek:
+                - back01.foo@node01.local
+                - back02.foo@node01.local
+            lolek:
+                - back101.foo@node01.local
+                - back102.foo@node01.local
