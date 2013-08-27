@@ -44,6 +44,7 @@ my %cmds = (
 	cleanup => \&cleanup,
 	help    => \&help,
 	deploy  => \&deploy,
+	restart => \&restart,
 );
 
 # just a main ;)
@@ -260,6 +261,56 @@ sub deploy() {
 	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
 }
 
+sub restart() {
+	my $start = time;
+
+	my %copts;
+	GetOptions(\%copts, qw(
+		dry-run|n
+		group|g=s
+	)) or goto &Help::main;
+
+	# single argument required (project name)
+	my $pname = shift @ARGV or die &Help::deploy;
+	goto &Help::deploy if @ARGV;
+
+	info "dry-run process (read only)"
+		if $copts{'dry-run'};
+
+	# get project info
+	my $proj = $conf->{ projects }{ $pname } or
+		fatal "no project found: $pname";
+
+	my $group = $copts{ group } // $proj->{ inactive };
+	if ( $group =~ m{^http://} ) {
+		info "detecting inactive group via http";
+		my $ua = LWP::UserAgent->new( timeout => 10 );
+		my $rs = $ua->get( $group );
+		fatal "can't detect inactive group: " . $rs->status_line
+			unless $rs->is_success;
+		$group = $rs->content;
+	}
+	my $mmbs = $proj->{ groups }{ $group } or
+		fatal "no group '$group' defined for project";
+
+	info "work on project: $pname ($group)";
+
+	for ( @$mmbs ) {
+		info "restarting $_";
+
+		my ( $jail,$host ) = split '@',$_;
+		debug "stopping $jail\@$host";
+		rcmd $host => "sudo ezjail-admin stop $jail"
+			unless $copts{'dry-run'};
+
+		debug "starting $jail\@$host";
+		rcmd $host => "sudo ezjail-admin start $jail"
+			unless $copts{'dry-run'};
+	}
+
+	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
+}
+
 sub jinfo(@) {
 	my ( $jail,$host,%kws ) = @_;
 
@@ -382,6 +433,21 @@ sub deploy {
 Deploy: apply super changes to group of instances
 
 Usage: deploy [options] project
+
+Options:
+    -g, --group=NAME   explicitly set group to deploy
+    -n, --dry-run      show what would have been done
+
+EOM
+}
+
+# restart help
+sub restart {
+	die <<EOM;
+
+Restart: stop & start group of instances
+
+Usage: restart [options] project
 
 Options:
     -g, --group=NAME   explicitly set group to deploy
