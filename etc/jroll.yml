@@ -7,9 +7,11 @@ projects:
         keep: 10
         groups:
             bolek:
-                - back01.foo@node01.local
-                - back02.foo@node01.local
+                - id: back01.foo@node01.local
+                - id: back02.foo@node01.local
+                  halt: true
             lolek:
-                - back101.foo@node01.local
-                - back102.foo@node01.local
+                - id: back101.foo@node01.local
+                - id: back102.foo@node01.local
+                  halt: true
 

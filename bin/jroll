@@ -45,6 +45,7 @@ my %cmds = (
 	help    => \&help,
 	deploy  => \&deploy,
 	restart => \&restart,
+	show    => \&show,
 );
 
 # just a main ;)
@@ -102,6 +103,8 @@ sub cleanup() {
 	# single argument required (project name)
 	my $pname = shift @ARGV or die &Help::cleanup;
 	goto &Help::cleanup if @ARGV;
+
+	fatal "not implemented yet";
 
 	info "dry-run process (read only)"
 		if $copts{'dry-run'};
@@ -189,8 +192,8 @@ sub deploy() {
 	# destinations info
 	my %trts;
 	for ( @$mmbs ) {
-		info "discovering targets info ($_)";
-		$trts{ $_ } = jinfo split '@',$_;
+		info "discovering targets info ($_->{ id })";
+		$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
 	}
 
 	info "searching for latest common snapshot";
@@ -198,7 +201,7 @@ sub deploy() {
 	for my $cnd ( @{ $super->{ snapshots } } ) {
 		my $fnd = 0;
 		for ( @$mmbs ) {
-			$fnd++ if $trts{ $_ }->{ mss }{ $cnd };
+			$fnd++ if $trts{ $_->{ id } }->{ mss }{ $cnd };
 		}
 		next unless $fnd == @$mmbs;
 
@@ -226,28 +229,36 @@ sub deploy() {
 	}
 
 	for ( @$mmbs ) {
-		info "applying delta onto $_";
+		info "applying delta onto $_->{ id }";
 
-		my ( $jail,$host ) = split '@',$_;
+		my ( $jail,$host ) = split '@',$_->{ id };
 		debug "transferring dump to $host";
 		rcmd $proj->{ super } => "scp -o StrictHostKeyChecking=no $dump $host:$dump"
 			unless $copts{'dry-run'};
 
-		debug "stopping $jail\@$host";
-		rcmd $host => "sudo ezjail-admin stop $jail"
-			unless $copts{'dry-run'};
+		if ( $trts{ $_->{ id } }{ running } ) {
+			debug "stopping $jail\@$host";
+			rcmd $host => "sudo ezjail-admin stop $jail"
+				unless $copts{'dry-run'};
+		} else {
+			debug "already stopped $jail\@$host";
+		}
 
 		debug "rollback $jail\@$host to \@$base";
-		rcmd $host => "sudo zfs rollback -r $trts{ $_ }{ rootfs }\@$base"
+		rcmd $host => "sudo zfs rollback -r $trts{ $_->{ id } }{ rootfs }\@$base"
 			unless $copts{'dry-run'};
 
 		debug "restoring $jail\@$host to \@$last";
-		rcmd $host => "sudo zfs recv $trts{ $_ }{ rootfs } < $dump"
+		rcmd $host => "sudo zfs recv $trts{ $_->{ id } }{ rootfs } < $dump"
 			unless $copts{'dry-run'};
 
-		debug "starting $jail\@$host";
-		rcmd $host => "sudo ezjail-admin start $jail"
-			unless $copts{'dry-run'};
+		unless ( $_->{ halt } ) {
+			debug "starting $jail\@$host";
+			rcmd $host => "sudo ezjail-admin start $jail"
+				unless $copts{'dry-run'};
+		} else {
+			debug "skip halted $jail\@$host";
+		}
 
 		rcmd $host => "rm -f $dump"
 			unless $copts{'dry-run'};
@@ -271,8 +282,8 @@ sub restart() {
 	)) or goto &Help::main;
 
 	# single argument required (project name)
-	my $pname = shift @ARGV or die &Help::deploy;
-	goto &Help::deploy if @ARGV;
+	my $pname = shift @ARGV or die &Help::restart;
+	goto &Help::restart if @ARGV;
 
 	info "dry-run process (read only)"
 		if $copts{'dry-run'};
@@ -295,20 +306,72 @@ sub restart() {
 
 	info "work on project: $pname ($group)";
 
+	# destinations info
+	my %trts;
 	for ( @$mmbs ) {
-		info "restarting $_";
+		info "discovering targets info ($_->{ id })";
+		$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
+	}
 
-		my ( $jail,$host ) = split '@',$_;
-		debug "stopping $jail\@$host";
-		rcmd $host => "sudo ezjail-admin stop $jail"
-			unless $copts{'dry-run'};
+	for ( @$mmbs ) {
+		info "restarting $_->{ id }";
 
-		debug "starting $jail\@$host";
-		rcmd $host => "sudo ezjail-admin start $jail"
-			unless $copts{'dry-run'};
+		my ( $jail,$host ) = split '@',$_->{ id };
+
+		if ( $trts{ $_->{ id } }{ running } ) {
+			debug "stopping $jail\@$host";
+			rcmd $host => "sudo ezjail-admin stop $jail"
+				unless $copts{'dry-run'};
+		} else {
+			debug "already stopped $jail\@$host";
+		}
+
+		unless ( $_->{ halt } ) {
+			debug "starting $jail\@$host";
+			rcmd $host => "sudo ezjail-admin start $jail"
+				unless $copts{'dry-run'};
+		} else {
+			debug "skip halted $jail\@$host";
+		}
 	}
 
 	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
+}
+
+sub show() {
+	my $start = time;
+
+	# optional arguments (projects)
+	my @projs = @ARGV ? @ARGV : sort keys %{ $conf->{ projects } };
+
+	for my $pname ( @projs ) {
+		# get project info
+		my $proj = $conf->{ projects }{ $pname } or
+			fatal "no project found: $pname";
+
+		my $inact = $proj->{ inactive };
+		if ( $inact =~ m{^http://} ) {
+			debug "detecting inactive group via http";
+			my $ua = LWP::UserAgent->new( timeout => 10 );
+			my $rs = $ua->get( $inact );
+			fatal "can't detect inactive group: " . $rs->status_line
+				unless $rs->is_success;
+			$inact = $rs->content;
+		}
+		fatal "no group '$inact' defined for project"
+			unless $proj->{ groups }{ $inact };
+
+		info "project '$pname', $proj->{ inactive }";
+		for my $grp ( sort keys %{ $proj->{ groups } } ) {
+			info "group '$grp', " . ( $grp eq $inact ? 'inactive' : 'active' );
+			for ( sort { $a->{id} cmp $b->{id} }  @{ $proj->{ groups }{ $grp } } ) {
+				my $inf = jinfo split '@',$_->{ id };
+				info "instance '$_->{ id }', " . ( $inf->{ running } ? 'running' : 'stopped' );
+			}
+		}
+	}
+
+	debug "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
 }
 
 sub jinfo(@) {
@@ -356,6 +419,13 @@ sub jinfo(@) {
 	# prepare snapshots mapping
 	$inf->{ mss } = { map { $_ => $_ } @{ $inf->{ snapshots } } };
 	debug "got snapshots for $jail\@$host";
+
+	# detect running states
+	for ( rcmd $host => "ezjail-admin list" ) {
+		my @flds = split ' ';
+		next unless $flds[2] eq $inf->{ ip } && $flds[ 3 ] eq $inf->{ hostname };
+		$inf->{ running } = $flds[0]=~/R/;
+	}
 
 	$inf;
 }
@@ -452,6 +522,17 @@ Usage: restart [options] project
 Options:
     -g, --group=NAME   explicitly set group to deploy
     -n, --dry-run      show what would have been done
+
+EOM
+}
+
+# show help
+sub show {
+	die <<EOM;
+
+Show detalied information about groups and instances of projects
+
+Usage: show [project]
 
 EOM
 }
