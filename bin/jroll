@@ -226,6 +226,73 @@ sub deploy() {
 	unless ( $copts{'dry-run'} ) {
 		my ( $size ) = rcmd $proj->{ super } => "stat -f%z $dump";
 		info "dumped $size bytes";
+
+		if ( my @notify = @{ $proj->{ notify } // [] } ) {
+			my @diff = map {[ split ' ' ]} rcmd $proj->{ super } =>
+					"sudo zfs diff -FH \@$base $super->{ rootfs }\@$last";
+
+			my ( %add,%del );
+			for ( @diff ) {
+				my ( $op,$tp,@ops ) = @$_;
+
+				# only files taken in account
+				next unless $tp eq 'F';
+
+				$add{ $ops[0] }++ if $op eq '+';
+				$del{ $ops[0] }++ if $op eq '-';
+			}
+			my $msg = <<EOM;
+# Project:  $pname
+# FS diff:  $super->{ rootfs } ('\@$base' => '\@$last')
+#
+# Oper.	Type	Path
+
+EOM
+			DIFF:
+			for ( @diff ) {
+				my ( $op,$tp,@ops ) = @$_;
+
+				# skip some directoris operations
+				next if $op eq 'M' && $tp eq '/';
+
+				# well-known excludes
+				my $bx = qr{ ^\Q$super->{ rootdir }\E }x;
+				for my $ex (qw( .*/\.git/ /tmp/ /var/ /(?:home/[^/]+|root)/\.(?:bash_)?history )) {
+					next DIFF if $ops[0] =~ qr{ $bx$ex }x;
+				}
+
+				# compact '-' and '+' into 'C'
+				next if $op eq '-' && $add{ $ops[0] };
+				$op = 'C' if $op eq '+' && $del{ $ops[0] };
+
+				$msg .= "  $op\t$tp\t@ops\n";
+			}
+
+			$msg .= <<EOM;
+
+#######################################################
+# Operations:
+#   -         path was removed
+#   +         path was added
+#   M         path was modified
+#   R         path was renamed
+#
+# Types:
+#   B         block device
+#   C         character device
+#   F         regular file
+#   /         directory
+#   @         symbolic link
+#   =         socket
+#######################################################
+EOM
+
+			if ( open my $mh,"|/usr/bin/mail -s 'Deploy report for $pname' " . join ',',@notify ) {
+				print $mh $msg;
+			} else {
+				info "can't send notify mail: $!";
+			}
+		}
 	}
 
 	for ( @$mmbs ) {
