@@ -257,7 +257,7 @@ EOM
 
 				# well-known excludes
 				my $bx = qr{ ^\Q$super->{ rootdir }\E }x;
-				for my $ex (qw( .*/\.git/ /tmp/ /var/ /(?:home/[^/]+|root)/\.(?:bash_)?history )) {
+				for my $ex (qw( .*/\.git/ /tmp/ /var/ /(?:home/[^/]+|root)/\.(?:bash_)?history /home/[^/]+/\.ansible/tmp/ /home/[^/]+/\.histfile )) {
 					next DIFF if $ops[0] =~ qr{ $bx$ex }x;
 				}
 
