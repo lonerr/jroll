@@ -274,12 +274,12 @@ sub deploy() {
 ---
 date:     %s
 group:    %s
-inactive: %s
+info:     %s
 jail:     %s
 node:     %s
 project:  %s
 EOM
-			&now, $group, $proj->{ inactive } // '~', $jail, $host, $pname;
+			&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
 
 			close $metafh;
 			my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
@@ -385,12 +385,12 @@ sub restart() {
 ---
 date:     %s
 group:    %s
-inactive: %s
+info:     %s
 jail:     %s
 node:     %s
 project:  %s
 EOM
-			&now, $group, $proj->{ inactive } // '~', $jail, $host, $pname;
+			&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
 
 			close $metafh;
 			my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
