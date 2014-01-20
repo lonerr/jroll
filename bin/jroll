@@ -14,6 +14,7 @@ use strict;
 use warnings;
 use utf8;
 
+use File::Temp qw(tempfile);
 use FindBin;
 use Getopt::Long qw( :config no_auto_abbrev bundling require_order );
 use LWP::UserAgent;
@@ -34,6 +35,9 @@ sub jinfo(@);
 
 # remote command execution
 sub rcmd($$);
+
+# remote file uploading
+sub rput($$$);
 
 # actions
 sub cleanup();
@@ -259,6 +263,36 @@ sub deploy() {
 				unless $copts{'dry-run'};
 		}
 
+		my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
+		debug "deploying meta file $meta" if $meta;
+
+		if ( $meta && ! $copts{'dry-run'} ) {
+			my ( $metafh,$metafn ) = tempfile or
+				fatal "can't create temporary meta file";
+			debug "preparing meta file $metafn" if $meta;
+			printf $metafh <<EOM,
+---
+date:     %s
+group:    %s
+inactive: %s
+jail:     %s
+node:     %s
+project:  %s
+EOM
+			&now, $group, $proj->{ inactive } // '~', $jail, $host, $pname;
+
+			close $metafh;
+			my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
+			debug "uploading meta file as $metatmp";
+			rput $host => $metafn => "$trts{ $_->{ id } }{ rootdir }$metatmp";
+
+			debug "moving meta file to $meta";
+			rcmd $host => "sudo mv $trts{ $_->{ id } }{ rootdir }$metatmp $trts{ $_->{ id } }{ rootdir }$meta";
+			rcmd $host => "sudo chown 0:0 $trts{ $_->{ id } }{ rootdir }$meta";
+			rcmd $host => "sudo chmod 444 $trts{ $_->{ id } }{ rootdir }$meta";
+			unlink $metafn;
+		}
+
 		unless ( $_->{ halt } ) {
 			debug "starting $jail\@$host";
 			rcmd $host => "sudo ezjail-admin start $jail"
@@ -338,6 +372,36 @@ sub restart() {
 		for my $f ( @fls ) {
 			rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
 				unless $copts{'dry-run'};
+		}
+
+		my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
+		debug "deploying meta file $meta" if $meta;
+
+		if ( $meta && ! $copts{'dry-run'} ) {
+			my ( $metafh,$metafn ) = tempfile or
+				fatal "can't create temporary meta file";
+			debug "preparing meta file $metafn" if $meta;
+			printf $metafh <<EOM,
+---
+date:     %s
+group:    %s
+inactive: %s
+jail:     %s
+node:     %s
+project:  %s
+EOM
+			&now, $group, $proj->{ inactive } // '~', $jail, $host, $pname;
+
+			close $metafh;
+			my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
+			debug "uploading meta file as $metatmp";
+			rput $host => $metafn => "$trts{ $_->{ id } }{ rootdir }$metatmp";
+
+			debug "moving meta file to $meta";
+			rcmd $host => "sudo mv $trts{ $_->{ id } }{ rootdir }$metatmp $trts{ $_->{ id } }{ rootdir }$meta";
+			rcmd $host => "sudo chown 0:0 $trts{ $_->{ id } }{ rootdir }$meta";
+			rcmd $host => "sudo chmod 444 $trts{ $_->{ id } }{ rootdir }$meta";
+			unlink $metafn;
 		}
 
 		unless ( $_->{ halt } ) {
@@ -447,12 +511,19 @@ sub jinfo(@) {
 sub rcmd($$) {
 	my ( $host,$cmd ) = @_;
 
-	# rcmd accepts host:foo as valid argument too
+	# rcmd accepts host@foo as valid argument too
 	$host =~ s/^.*\@//;
 
 	chomp( my @out = qx( ssh -o StrictHostKeyChecking=no $host '$cmd' ) );
 	fatal qq(can't execute remote: "@out") if $?;
 	@out;
+}
+
+sub rput($$$) {
+	my ( $host,$src,$dst ) = @_;
+
+	chomp( my @out = qx( scp -o StrictHostKeyChecking=no '$src' $host:'$dst' ) );
+	fatal qq(can't put to remote: "@out") if $?;
 }
 
 
