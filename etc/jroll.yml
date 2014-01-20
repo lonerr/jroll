@@ -1,17 +1,31 @@
 ---
 projects:
 
+    bar:
+        inactive: http://bar.local/jset
+        super: super.bar@host.local
+        keep: 10
+        copy: [ '/etc/fstab','/etc/resolv.conf' ]
+        groups:
+            bolek:
+                - id: back01.bar@node01.local
+                - id: back02.bar@node01.local
+            lolek:
+                - id: back101.bar@node01.local
+                - id: back102.bar@node01.local
+
     foo:
         inactive: http://foo.local/jset
         super: super.foo@host.local
         keep: 10
+        copy: []
         groups:
             bolek:
                 - id: back01.foo@node01.local
                 - id: back02.foo@node01.local
                   halt: true
+                  copy: [ '/etc/fstab','/etc/resolv.conf' ]
             lolek:
                 - id: back101.foo@node01.local
                 - id: back102.foo@node01.local
                   halt: true
-
