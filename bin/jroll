@@ -253,7 +253,7 @@ sub deploy() {
 			unless $copts{'dry-run'};
 
 		my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
-		debug "copiyng master files: " .( join ',', @fls ) if @fls;
+		debug "copiyng node files: " .( join ',', @fls ) if @fls;
 		for my $f ( @fls ) {
 			rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
 				unless $copts{'dry-run'};
@@ -334,7 +334,7 @@ sub restart() {
 		}
 
 		my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
-		debug "copiyng master files: " .( join ',', @fls ) if @fls;
+		debug "copiyng node files: " .( join ',', @fls ) if @fls;
 		for my $f ( @fls ) {
 			rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
 				unless $copts{'dry-run'};
