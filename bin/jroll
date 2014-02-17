@@ -164,113 +164,113 @@ sub deploy() {
 		group|g=s
 	)) or goto &Help::main;
 
-	# single argument required (project name)
-	my $pname = shift @ARGV or die &Help::deploy;
-	goto &Help::deploy if @ARGV;
+	# required arguments (projects)
+	goto &Help::deploy unless @ARGV;
 
-	info "dry-run process (read only)"
-		if $copts{'dry-run'};
+	for my $pname ( @ARGV ) {
+		info "dry-run process (read only)"
+			if $copts{'dry-run'};
 
-	# get project info
-	my $proj = $conf->{ projects }{ $pname } or
-		fatal "no project found: $pname";
+		# get project info
+		my $proj = $conf->{ projects }{ $pname } or
+			fatal "no project found: $pname";
 
-	my $group = $copts{ group } // $proj->{ inactive };
-	if ( $group =~ m{^http://} ) {
-		info "detecting inactive group via http";
-		my $ua = LWP::UserAgent->new( timeout => 10 );
-		my $rs = $ua->get( $group );
-		fatal "can't detect inactive group: " . $rs->status_line
-			unless $rs->is_success;
-		$group = $rs->content;
-	}
-	my $mmbs = $proj->{ groups }{ $group } or
-		fatal "no group '$group' defined for project";
+		my $group = $copts{ group } // $proj->{ inactive };
+		if ( $group =~ m{^http://} ) {
+			info "detecting inactive group via http";
+			my $ua = LWP::UserAgent->new( timeout => 10 );
+			my $rs = $ua->get( $group );
+			fatal "can't detect inactive group: " . $rs->status_line
+				unless $rs->is_success;
+			$group = $rs->content;
+		}
+		my $mmbs = $proj->{ groups }{ $group } or
+			fatal "no group '$group' defined for project";
 
-	info "work on project: $pname ($group)";
-	
-	# super info
-	info "discovering super info";
-	my $super = jinfo split '@',$proj->{ super };
+		info "work on project: $pname ($group)";
 
-	# destinations info
-	my %trts;
-	for ( @$mmbs ) {
-		info "discovering targets info ($_->{ id })";
-		$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
-	}
+		# super info
+		info "discovering super info";
+		my $super = jinfo split '@',$proj->{ super };
 
-	info "searching for latest common snapshot";
-	my $base;
-	for my $cnd ( @{ $super->{ snapshots } } ) {
-		my $fnd = 0;
+		# destinations info
+		my %trts;
 		for ( @$mmbs ) {
-			$fnd++ if $trts{ $_->{ id } }->{ mss }{ $cnd };
+			info "discovering targets info ($_->{ id })";
+			$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
 		}
-		next unless $fnd == @$mmbs;
 
-		$base = $cnd;
-		info "selected base snapshot: $base";
-		last;
-	}
-	fatal "no one common snapshot found"
-		unless $base;
+		info "searching for latest common snapshot";
+		my $base;
+		for my $cnd ( @{ $super->{ snapshots } } ) {
+			my $fnd = 0;
+			for ( @$mmbs ) {
+				$fnd++ if $trts{ $_->{ id } }->{ mss }{ $cnd };
+			}
+			next unless $fnd == @$mmbs;
 
-	# name pattern does matter for cleanup process!
-	my $last = 'jroll.' . strftime '%Y-%m-%d.%H:%M:%S',localtime;
-	info "creating super snapshot: $last"; 
-	rcmd $proj->{ super } => "sudo zfs snapshot $super->{ rootfs }\@$last"
-		unless $copts{'dry-run'};
+			$base = $cnd;
+			info "selected base snapshot: $base";
+			last;
+		}
+		fatal "no one common snapshot found"
+			unless $base;
 
-	my $dump = "/tmp/$FindBin::Script." . getpwuid($<) . ".$$.$pname";
-	info "dumping super delta into $dump"; 
-	rcmd $proj->{ super } => "sudo zfs send -I \@$base $super->{ rootfs }\@$last > $dump"
-		unless $copts{'dry-run'};
-
-	unless ( $copts{'dry-run'} ) {
-		my ( $size ) = rcmd $proj->{ super } => "stat -f%z $dump";
-		info "dumped $size bytes";
-	}
-
-	for ( @$mmbs ) {
-		info "applying delta onto $_->{ id }";
-
-		my ( $jail,$host ) = split '@',$_->{ id };
-		debug "transferring dump to $host";
-		rcmd $proj->{ super } => "scp -o StrictHostKeyChecking=no $dump $host:$dump"
+		# name pattern does matter for cleanup process!
+		my $last = 'jroll.' . strftime '%Y-%m-%d.%H:%M:%S',localtime;
+		info "creating super snapshot: $last"; 
+		rcmd $proj->{ super } => "sudo zfs snapshot $super->{ rootfs }\@$last"
 			unless $copts{'dry-run'};
 
-		if ( $trts{ $_->{ id } }{ running } ) {
-			debug "stopping $jail\@$host";
-			rcmd $host => "sudo ezjail-admin stop $jail"
+		my $dump = "/tmp/$FindBin::Script." . getpwuid($<) . ".$$.$pname";
+		info "dumping super delta into $dump"; 
+		rcmd $proj->{ super } => "sudo zfs send -I \@$base $super->{ rootfs }\@$last > $dump"
+			unless $copts{'dry-run'};
+
+		unless ( $copts{'dry-run'} ) {
+			my ( $size ) = rcmd $proj->{ super } => "stat -f%z $dump";
+			info "dumped $size bytes";
+		}
+
+		for ( @$mmbs ) {
+			info "applying delta onto $_->{ id }";
+
+			my ( $jail,$host ) = split '@',$_->{ id };
+			debug "transferring dump to $host";
+			rcmd $proj->{ super } => "scp -o StrictHostKeyChecking=no $dump $host:$dump"
 				unless $copts{'dry-run'};
-		} else {
-			debug "already stopped $jail\@$host";
-		}
 
-		debug "rollback $jail\@$host to \@$base";
-		rcmd $host => "sudo zfs rollback -r $trts{ $_->{ id } }{ rootfs }\@$base"
-			unless $copts{'dry-run'};
+			if ( $trts{ $_->{ id } }{ running } ) {
+				debug "stopping $jail\@$host";
+				rcmd $host => "sudo ezjail-admin stop $jail"
+					unless $copts{'dry-run'};
+			} else {
+				debug "already stopped $jail\@$host";
+			}
 
-		debug "restoring $jail\@$host to \@$last";
-		rcmd $host => "sudo zfs recv $trts{ $_->{ id } }{ rootfs } < $dump"
-			unless $copts{'dry-run'};
-
-		my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
-		debug "copiyng node files: " .( join ',', @fls ) if @fls;
-		for my $f ( @fls ) {
-			rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
+			debug "rollback $jail\@$host to \@$base";
+			rcmd $host => "sudo zfs rollback -r $trts{ $_->{ id } }{ rootfs }\@$base"
 				unless $copts{'dry-run'};
-		}
 
-		my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
-		debug "deploying meta file $meta" if $meta;
+			debug "restoring $jail\@$host to \@$last";
+			rcmd $host => "sudo zfs recv $trts{ $_->{ id } }{ rootfs } < $dump"
+				unless $copts{'dry-run'};
 
-		if ( $meta && ! $copts{'dry-run'} ) {
-			my ( $metafh,$metafn ) = tempfile or
-				fatal "can't create temporary meta file";
-			debug "preparing meta file $metafn" if $meta;
-			printf $metafh <<EOM,
+			my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
+			debug "copiyng node files: " .( join ',', @fls ) if @fls;
+			for my $f ( @fls ) {
+				rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
+					unless $copts{'dry-run'};
+			}
+
+			my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
+			debug "deploying meta file $meta" if $meta;
+
+			if ( $meta && ! $copts{'dry-run'} ) {
+				my ( $metafh,$metafn ) = tempfile or
+					fatal "can't create temporary meta file";
+				debug "preparing meta file $metafn" if $meta;
+				printf $metafh <<EOM,
 ---
 date:     %s
 group:    %s
@@ -279,36 +279,37 @@ jail:     %s
 node:     %s
 project:  %s
 EOM
-			&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
+				&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
 
-			close $metafh;
-			my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
-			debug "uploading meta file as $metatmp";
-			rput $host => $metafn => "$trts{ $_->{ id } }{ rootdir }$metatmp";
+				close $metafh;
+				my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
+				debug "uploading meta file as $metatmp";
+				rput $host => $metafn => "$trts{ $_->{ id } }{ rootdir }$metatmp";
 
-			debug "moving meta file to $meta";
-			rcmd $host => "sudo mv $trts{ $_->{ id } }{ rootdir }$metatmp $trts{ $_->{ id } }{ rootdir }$meta";
-			rcmd $host => "sudo chown 0:0 $trts{ $_->{ id } }{ rootdir }$meta";
-			rcmd $host => "sudo chmod 444 $trts{ $_->{ id } }{ rootdir }$meta";
-			unlink $metafn;
-		}
+				debug "moving meta file to $meta";
+				rcmd $host => "sudo mv $trts{ $_->{ id } }{ rootdir }$metatmp $trts{ $_->{ id } }{ rootdir }$meta";
+				rcmd $host => "sudo chown 0:0 $trts{ $_->{ id } }{ rootdir }$meta";
+				rcmd $host => "sudo chmod 444 $trts{ $_->{ id } }{ rootdir }$meta";
+				unlink $metafn;
+			}
 
-		unless ( $_->{ halt } ) {
-			debug "starting $jail\@$host";
-			rcmd $host => "sudo ezjail-admin start $jail"
+			unless ( $_->{ halt } ) {
+				debug "starting $jail\@$host";
+				rcmd $host => "sudo ezjail-admin start $jail"
+					unless $copts{'dry-run'};
+			} else {
+				debug "skip halted $jail\@$host";
+			}
+
+			rcmd $host => "rm -f $dump"
 				unless $copts{'dry-run'};
-		} else {
-			debug "skip halted $jail\@$host";
+			debug "dump removed at $host";
 		}
 
-		rcmd $host => "rm -f $dump"
+		rcmd $proj->{ super } => "rm -f $dump"
 			unless $copts{'dry-run'};
-		debug "dump removed at $host";
+		debug "super dump removed";
 	}
-
-	rcmd $proj->{ super } => "rm -f $dump"
-		unless $copts{'dry-run'};
-	debug "super dump removed";
 
 	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
 }
@@ -322,66 +323,66 @@ sub restart() {
 		group|g=s
 	)) or goto &Help::main;
 
-	# single argument required (project name)
-	my $pname = shift @ARGV or die &Help::restart;
-	goto &Help::restart if @ARGV;
+	# required arguments (projects)
+	goto &Help::restart unless @ARGV;
 
-	info "dry-run process (read only)"
-		if $copts{'dry-run'};
+	for my $pname ( @ARGV ) {
+		info "dry-run process (read only)"
+			if $copts{'dry-run'};
 
-	# get project info
-	my $proj = $conf->{ projects }{ $pname } or
-		fatal "no project found: $pname";
+		# get project info
+		my $proj = $conf->{ projects }{ $pname } or
+			fatal "no project found: $pname";
 
-	my $group = $copts{ group } // $proj->{ inactive };
-	if ( $group =~ m{^http://} ) {
-		info "detecting inactive group via http";
-		my $ua = LWP::UserAgent->new( timeout => 10 );
-		my $rs = $ua->get( $group );
-		fatal "can't detect inactive group: " . $rs->status_line
-			unless $rs->is_success;
-		$group = $rs->content;
-	}
-	my $mmbs = $proj->{ groups }{ $group } or
-		fatal "no group '$group' defined for project";
+		my $group = $copts{ group } // $proj->{ inactive };
+		if ( $group =~ m{^http://} ) {
+			info "detecting inactive group via http";
+			my $ua = LWP::UserAgent->new( timeout => 10 );
+			my $rs = $ua->get( $group );
+			fatal "can't detect inactive group: " . $rs->status_line
+				unless $rs->is_success;
+			$group = $rs->content;
+		}
+		my $mmbs = $proj->{ groups }{ $group } or
+			fatal "no group '$group' defined for project";
 
-	info "work on project: $pname ($group)";
+		info "work on project: $pname ($group)";
 
-	# destinations info
-	my %trts;
-	for ( @$mmbs ) {
-		info "discovering targets info ($_->{ id })";
-		$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
-	}
-
-	for ( @$mmbs ) {
-		info "restarting $_->{ id }";
-
-		my ( $jail,$host ) = split '@',$_->{ id };
-
-		if ( $trts{ $_->{ id } }{ running } ) {
-			debug "stopping $jail\@$host";
-			rcmd $host => "sudo ezjail-admin stop $jail"
-				unless $copts{'dry-run'};
-		} else {
-			debug "already stopped $jail\@$host";
+		# destinations info
+		my %trts;
+		for ( @$mmbs ) {
+			info "discovering targets info ($_->{ id })";
+			$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
 		}
 
-		my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
-		debug "copiyng node files: " .( join ',', @fls ) if @fls;
-		for my $f ( @fls ) {
-			rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
-				unless $copts{'dry-run'};
-		}
+		for ( @$mmbs ) {
+			info "restarting $_->{ id }";
 
-		my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
-		debug "deploying meta file $meta" if $meta;
+			my ( $jail,$host ) = split '@',$_->{ id };
 
-		if ( $meta && ! $copts{'dry-run'} ) {
-			my ( $metafh,$metafn ) = tempfile or
-				fatal "can't create temporary meta file";
-			debug "preparing meta file $metafn" if $meta;
-			printf $metafh <<EOM,
+			if ( $trts{ $_->{ id } }{ running } ) {
+				debug "stopping $jail\@$host";
+				rcmd $host => "sudo ezjail-admin stop $jail"
+					unless $copts{'dry-run'};
+			} else {
+				debug "already stopped $jail\@$host";
+			}
+
+			my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
+			debug "copiyng node files: " .( join ',', @fls ) if @fls;
+			for my $f ( @fls ) {
+				rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
+					unless $copts{'dry-run'};
+			}
+
+			my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
+			debug "deploying meta file $meta" if $meta;
+
+			if ( $meta && ! $copts{'dry-run'} ) {
+				my ( $metafh,$metafn ) = tempfile or
+					fatal "can't create temporary meta file";
+				debug "preparing meta file $metafn" if $meta;
+				printf $metafh <<EOM,
 ---
 date:     %s
 group:    %s
@@ -390,29 +391,29 @@ jail:     %s
 node:     %s
 project:  %s
 EOM
-			&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
+				&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
 
-			close $metafh;
-			my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
-			debug "uploading meta file as $metatmp";
-			rput $host => $metafn => "$trts{ $_->{ id } }{ rootdir }$metatmp";
+				close $metafh;
+				my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
+				debug "uploading meta file as $metatmp";
+				rput $host => $metafn => "$trts{ $_->{ id } }{ rootdir }$metatmp";
 
-			debug "moving meta file to $meta";
-			rcmd $host => "sudo mv $trts{ $_->{ id } }{ rootdir }$metatmp $trts{ $_->{ id } }{ rootdir }$meta";
-			rcmd $host => "sudo chown 0:0 $trts{ $_->{ id } }{ rootdir }$meta";
-			rcmd $host => "sudo chmod 444 $trts{ $_->{ id } }{ rootdir }$meta";
-			unlink $metafn;
-		}
+				debug "moving meta file to $meta";
+				rcmd $host => "sudo mv $trts{ $_->{ id } }{ rootdir }$metatmp $trts{ $_->{ id } }{ rootdir }$meta";
+				rcmd $host => "sudo chown 0:0 $trts{ $_->{ id } }{ rootdir }$meta";
+				rcmd $host => "sudo chmod 444 $trts{ $_->{ id } }{ rootdir }$meta";
+				unlink $metafn;
+			}
 
-		unless ( $_->{ halt } ) {
-			debug "starting $jail\@$host";
-			rcmd $host => "sudo ezjail-admin start $jail"
-				unless $copts{'dry-run'};
-		} else {
-			debug "skip halted $jail\@$host";
+			unless ( $_->{ halt } ) {
+				debug "starting $jail\@$host";
+				rcmd $host => "sudo ezjail-admin start $jail"
+					unless $copts{'dry-run'};
+			} else {
+				debug "skip halted $jail\@$host";
+			}
 		}
 	}
-
 	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
 }
 
