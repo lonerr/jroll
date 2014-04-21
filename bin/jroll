@@ -466,6 +466,10 @@ sub jinfo(@) {
 	for ( rcmd $host => "cat /usr/local/etc/ezjail/$name" ) {
 		my ( $k,$v ) = /^\s*export\s+jail_${ name }_(\w+)="([^"]+)"\s*$/ or
 			next;
+
+		# ip address can be written as 'lo0:10.0.0.1/32'
+		$v =~ s/^[^|]+\|// if $k eq 'ip';
+
 		$inf->{ $k } = $v;
 	}
 	debug "loaded jail settings for $jail\@$host";
