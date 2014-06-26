@@ -319,6 +319,7 @@ sub restart() {
 
 	my %copts;
 	GetOptions(\%copts, qw(
+		active|a
 		dry-run|n
 		group|g=s
 	)) or goto &Help::main;
@@ -342,6 +343,19 @@ sub restart() {
 			fatal "can't detect inactive group: " . $rs->status_line
 				unless $rs->is_success;
 			$group = $rs->content;
+
+			unless ( $copts{ active } ) {
+				info "detected inactive group '$group'";
+			} else {
+				my $ng = keys %{ $proj->{ groups } };
+				fatal "can't detect active group automatically from $ng groups"
+					unless $ng == 2;
+				for ( keys %{ $proj->{ groups } } ) {
+					next if $_ eq $group;
+					$group = $_; last;
+				}
+				info "detected active group '$group'";
+			}
 		}
 		my $mmbs = $proj->{ groups }{ $group } or
 			fatal "no group '$group' defined for project";
@@ -610,7 +624,8 @@ Restart: stop & start group of instances
 Usage: restart [options] project
 
 Options:
-    -g, --group=NAME   explicitly set group to deploy
+    -a, --active       restart active ('head') group
+    -g, --group=NAME   explicitly set group to restart
     -n, --dry-run      show what would have been done
 
 EOM
