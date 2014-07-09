@@ -224,8 +224,10 @@ sub deploy() {
 
 		my $dump = "/tmp/$FindBin::Script." . getpwuid($<) . ".$$.$pname";
 		info "dumping super delta into $dump"; 
-		rcmd $proj->{ super } => "sudo zfs send -I \@$base $super->{ rootfs }\@$last > $dump"
-			unless $copts{'dry-run'};
+		my $cmd = "sudo zfs send -I \@$base $super->{ rootfs }\@$last " .
+			( $proj->{ compress } ? "| $proj->{ compress }" : '' ) . " > $dump";
+		debug "executing '$cmd' at $proj->{ super }";
+		rcmd $proj->{ super } => $cmd unless $copts{'dry-run'};
 
 		unless ( $copts{'dry-run'} ) {
 			my ( $size ) = rcmd $proj->{ super } => "stat -f%z $dump";
@@ -253,8 +255,11 @@ sub deploy() {
 				unless $copts{'dry-run'};
 
 			debug "restoring $jail\@$host to \@$last";
-			rcmd $host => "sudo zfs recv $trts{ $_->{ id } }{ rootfs } < $dump"
-				unless $copts{'dry-run'};
+			my $cmd = $proj->{ decompress } ?
+				"$proj->{ decompress } < $dump | sudo zfs recv $trts{ $_->{ id } }{ rootfs }" :
+				"sudo zfs recv $trts{ $_->{ id } }{ rootfs } < $dump";
+			debug "executing '$cmd' at $host";
+			rcmd $host => $cmd unless $copts{'dry-run'};
 
 			my @fls = @{ $_->{ copy } // $proj->{ copy } // [qw( /etc/hosts /etc/resolv.conf )] };
 			debug "copiyng node files: " .( join ',', @fls ) if @fls;

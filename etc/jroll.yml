@@ -5,6 +5,8 @@ projects:
         inactive: http://bar.local/jset
         super: super.bar@host.local
         keep: 10
+        compress:   lz4c -c0
+        decompress: lz4c -d
         copy: [ '/etc/fstab','/etc/resolv.conf' ]
         groups:
             bolek:
@@ -18,6 +20,8 @@ projects:
         inactive: http://foo.local/jset
         super: super.foo@host.local
         keep: 10
+        compress:   gzip -9
+        decompress: gunzip
         copy: []
         groups:
             bolek:
