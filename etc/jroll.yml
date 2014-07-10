@@ -19,6 +19,7 @@ projects:
     foo:
         inactive: http://foo.local/jset
         super: super.foo@host.local
+        dc: hetzner
         keep: 10
         compress:   gzip -9
         decompress: gunzip
@@ -26,9 +27,13 @@ projects:
         groups:
             bolek:
                 - id: back01.foo@node01.local
+                  dc: relkom
                 - id: back02.foo@node01.local
+                  dc: relkom
                   halt: true
                   copy: [ '/etc/fstab','/etc/resolv.conf' ]
+                - id: back03.foo@node01.local
+                  dc: relkom
             lolek:
                 - id: back101.foo@node01.local
                 - id: back102.foo@node01.local

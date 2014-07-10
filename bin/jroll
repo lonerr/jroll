@@ -193,11 +193,28 @@ sub deploy() {
 		info "discovering super info";
 		my $super = jinfo split '@',$proj->{ super };
 
+		# datacenters info
+		my %dcs;
+
+		# keep super as first pillar
+		$dcs{ $proj->{ dc } // '' } = { pillar => $proj->{ super }, consumers => 0 };
+
 		# destinations info
 		my %trts;
 		for ( @$mmbs ) {
 			info "discovering targets info ($_->{ id })";
 			$trts{ $_->{ id } } = jinfo split '@',$_->{ id };
+
+			my $dc = $_->{ dc } // '';
+			if ( exists $dcs{ $dc } ) {
+				$trts{ $_->{ id } }{ pillar } = $dcs{ $dc }{ pillar };
+				$dcs{ $dc }{ consumers }++;
+			} else {
+				$trts{ $_->{ id } }{ pillar } = $proj->{ super };
+				$dcs{ $proj->{ dc } // '' }{ consumers }++;
+				$dcs{ $dc }{ pillar } = $_->{ id };
+				$dcs{ $dc }{ consumers } = 0;
+			}
 		}
 
 		info "searching for latest common snapshot";
@@ -238,8 +255,10 @@ sub deploy() {
 			info "applying delta onto $_->{ id }";
 
 			my ( $jail,$host ) = split '@',$_->{ id };
-			debug "transferring dump to $host";
-			rcmd $proj->{ super } => "scp -o StrictHostKeyChecking=no $dump $host:$dump"
+			my ( undef,$pillar ) = split '@',$trts{ $_->{ id } }{ pillar };
+
+			debug "transferring dump from $pillar to $host";
+			rcmd $pillar => "scp -o StrictHostKeyChecking=no $dump $host:$dump"
 				unless $copts{'dry-run'};
 
 			if ( $trts{ $_->{ id } }{ running } ) {
@@ -306,14 +325,22 @@ EOM
 				debug "skip halted $jail\@$host";
 			}
 
-			rcmd $host => "rm -f $dump"
-				unless $copts{'dry-run'};
-			debug "dump removed at $host";
+			my $dcp = $dcs{ $_->{ dc } // '' }{ pillar };
+			unless ( $dcp eq $_->{ id } ) {
+				rcmd $host => "rm -f $dump"
+					unless $copts{'dry-run'};
+				debug "dump removed at $host";
+			} else {
+				debug "dump keeped as pillar at $host";
+			}
 		}
 
-		rcmd $proj->{ super } => "rm -f $dump"
-			unless $copts{'dry-run'};
-		debug "super dump removed";
+		for ( sort keys %dcs ) {
+			my ( undef,$pillar ) = split '@',$dcs{ $_ }{ pillar };
+			rcmd $pillar => "rm -f $dump"
+				unless $copts{'dry-run'};
+			debug "pillar dump removed at $pillar";
+		}
 	}
 
 	info "all tasks completed successfully, elapsed ". ( time - $start ) . " seconds";
