@@ -160,6 +160,7 @@ sub deploy() {
 
 	my %copts;
 	GetOptions(\%copts, qw(
+		clean|c
 		dry-run|n
 		group|g=s
 	)) or goto &Help::main;
@@ -232,6 +233,18 @@ sub deploy() {
 		}
 		fatal "no one common snapshot found"
 			unless $base;
+
+		# start cleaning
+		if ( $copts{ clean } ) {
+			(my $jname) = split '@',$proj->{ super };
+			info "cleaning $jname";
+			rcmd $proj->{ super } => "sudo ezjail-admin stop $jname"
+					unless $copts{'dry-run'};
+				rcmd $proj->{ super } => "sudo find $super->{ rootdir }/var/log/ -type f -delete"
+					unless $copts{'dry-run'};
+				rcmd $proj->{ super } => "sudo ezjail-admin start $jname"
+					unless $copts{'dry-run'};
+		}
 
 		# name pattern does matter for cleanup process!
 		my $last = 'jroll.' . strftime '%Y-%m-%d.%H:%M:%S',localtime;
@@ -641,6 +654,7 @@ Deploy: apply super changes to group of instances
 Usage: deploy [options] project
 
 Options:
+    -c, --clean        clean /tmp and logs before sending snapshots
     -g, --group=NAME   explicitly set group to deploy
     -n, --dry-run      show what would have been done
 
