@@ -30,6 +30,9 @@ sub debug { warn &now . " [debug] @_\n" if $opts{ verbose } }
 sub info  { warn &now . "  [info] @_\n" }
 sub fatal { die  &now . " [error] @_\n" }
 
+# get inactive group for project
+sub inactive($);
+
 # get full jail info
 sub jinfo(@);
 
@@ -134,7 +137,7 @@ sub cleanup() {
 			fatal "no group '$group' defined for project";
 	} : \@all;
 
-	info "work on project: $pname (" . ( $group // 'all groups' ) . ")";
+	info "work on project '$pname', (" . ( $group // 'all groups' ) . ")";
 
 	# super info
 	info "discovering super info";
@@ -176,19 +179,12 @@ sub deploy() {
 		my $proj = $conf->{ projects }{ $pname } or
 			fatal "no project found: $pname";
 
-		my $group = $copts{ group } // $proj->{ inactive };
-		if ( $group =~ m{^http://} ) {
-			info "detecting inactive group via http";
-			my $ua = LWP::UserAgent->new( timeout => 10 );
-			my $rs = $ua->get( $group );
-			fatal "can't detect inactive group: " . $rs->status_line
-				unless $rs->is_success;
-			$group = $rs->content;
-		}
-		my $mmbs = $proj->{ groups }{ $group } or
-			fatal "no group '$group' defined for project";
+		my $inact = $copts{ group } // inactive $proj;
 
-		info "work on project: $pname ($group)";
+		my $mmbs = $proj->{ groups }{ $inact } or
+			fatal "no group '$inact' defined for project";
+
+		info "work on project '$pname', group '$inact'";
 
 		# super info
 		info "discovering super info";
@@ -316,7 +312,7 @@ jail:     %s
 node:     %s
 project:  %s
 EOM
-				&now, $group, $proj->{ info } // '~', $jail, $host, $pname;
+				&now, $inact, $proj->{ info } // '~', $jail, $host, $pname;
 
 				close $metafh;
 				my $metatmp = '/tmp/deploy.meta.yml.' . getpwuid($<) . ".$$";
@@ -380,32 +376,23 @@ sub restart() {
 		my $proj = $conf->{ projects }{ $pname } or
 			fatal "no project found: $pname";
 
-		my $group = $copts{ group } // $proj->{ inactive };
-		if ( $group =~ m{^http://} ) {
-			info "detecting inactive group via http";
-			my $ua = LWP::UserAgent->new( timeout => 10 );
-			my $rs = $ua->get( $group );
-			fatal "can't detect inactive group: " . $rs->status_line
-				unless $rs->is_success;
-			$group = $rs->content;
+		my $group = $copts{ group } // inactive $proj;
 
-			unless ( $copts{ active } ) {
-				info "detected inactive group '$group'";
-			} else {
-				my $ng = keys %{ $proj->{ groups } };
-				fatal "can't detect active group automatically from $ng groups"
-					unless $ng == 2;
-				for ( keys %{ $proj->{ groups } } ) {
-					next if $_ eq $group;
-					$group = $_; last;
-				}
-				info "detected active group '$group'";
+		if ( $copts{ active } ) {
+			my $ng = keys %{ $proj->{ groups } };
+			fatal "can't detect active group automatically from $ng groups"
+				unless $ng == 2;
+			for ( keys %{ $proj->{ groups } } ) {
+				next if $_ eq $group;
+				$group = $_; last;
 			}
+			info "detected active group '$group'";
 		}
+
 		my $mmbs = $proj->{ groups }{ $group } or
 			fatal "no group '$group' defined for project";
 
-		info "work on project: $pname ($group)";
+		info "work on project '$pname', group '$group'";
 
 		# destinations info
 		my %trts;
@@ -487,15 +474,7 @@ sub show() {
 		my $proj = $conf->{ projects }{ $pname } or
 			fatal "no project found: $pname";
 
-		my $inact = $proj->{ inactive };
-		if ( $inact =~ m{^http://} ) {
-			debug "detecting inactive group via http";
-			my $ua = LWP::UserAgent->new( timeout => 10 );
-			my $rs = $ua->get( $inact );
-			fatal "can't detect inactive group: " . $rs->status_line
-				unless $rs->is_success;
-			$inact = $rs->content;
-		}
+		my $inact = inactive $proj;
 		fatal "no group '$inact' defined for project"
 			unless $proj->{ groups }{ $inact };
 
@@ -570,6 +549,42 @@ sub jinfo(@) {
 	}
 
 	$inf;
+}
+
+sub inactive($) {
+	my ( $proj ) = @_;
+
+	if ( my $x = $proj->{ info } ) {
+		info "detecting inactive group via http (using 'info')";
+		my $ua = LWP::UserAgent->new( timeout => 10 );
+		my $rs = $ua->get( $x );
+		fatal "can't fetch '$x': " . $rs->status_line
+			unless $rs->is_success;
+		fatal "unexpected content type of '$x': " . $rs->header('content-type')
+			unless $rs->header('content-type') eq 'text/yaml';
+		my $info = Load $rs->content or
+			fatal "can't parse response ($x)";
+		my $inact = $info->{ tail } // fatal "no 'tail' found in response ($x)";
+
+		info "detected inactive group '$inact'";
+		return $inact;
+	}
+
+	if ( my $x = $proj->{ inactive } ) {
+		return $x unless $x =~ m{^http://}; # plain group name
+
+		info "detecting inactive group via http (using 'inactive')";
+		my $ua = LWP::UserAgent->new( timeout => 10 );
+		my $rs = $ua->get( $x );
+		fatal "can't fetch '$x': " . $rs->status_line
+			unless $rs->is_success;
+		my $inact = $rs->content;
+
+		info "detected inactive group '$inact'";
+		return $inact;
+	}
+
+	fatal "can't detect inactive group, neither 'info' nor 'inactive' found";
 }
 
 sub rcmd($$) {

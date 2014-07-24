@@ -2,7 +2,7 @@
 projects:
 
     bar:
-        inactive: http://bar.local/jset
+        inactive: http://bar.local/jset/tail
         super: super.bar@host.local
         keep: 10
         compress:   lz4c -c0
@@ -17,7 +17,7 @@ projects:
                 - id: back102.bar@node01.local
 
     foo:
-        inactive: http://foo.local/jset
+        info: http://foo.local/jset
         super: super.foo@host.local
         dc: hetzner
         keep: 10
