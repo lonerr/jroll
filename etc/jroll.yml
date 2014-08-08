@@ -8,6 +8,7 @@ projects:
         compress:   lz4c -c0
         decompress: lz4c -d
         copy: [ '/etc/fstab','/etc/resolv.conf' ]
+        clean: [ '/tmp', '/var/log' ]
         groups:
             bolek:
                 - id: back01.bar@node01.local
@@ -24,6 +25,7 @@ projects:
         compress:   gzip -9
         decompress: gunzip
         copy: []
+        clean: [ '/tmp', '/var/log' ]
         groups:
             bolek:
                 - id: back01.foo@node01.local

@@ -163,7 +163,6 @@ sub deploy() {
 
 	my %copts;
 	GetOptions(\%copts, qw(
-		clean|c
 		dry-run|n
 		group|g=s
 	)) or goto &Help::main;
@@ -230,18 +229,6 @@ sub deploy() {
 		fatal "no one common snapshot found"
 			unless $base;
 
-		# start cleaning
-		if ( $copts{ clean } ) {
-			(my $jname) = split '@',$proj->{ super };
-			info "cleaning $jname";
-			rcmd $proj->{ super } => "sudo ezjail-admin stop $jname"
-					unless $copts{'dry-run'};
-				rcmd $proj->{ super } => "sudo find $super->{ rootdir }/var/log/ -type f -delete"
-					unless $copts{'dry-run'};
-				rcmd $proj->{ super } => "sudo ezjail-admin start $jname"
-					unless $copts{'dry-run'};
-		}
-
 		# name pattern does matter for cleanup process!
 		my $last = 'jroll.' . strftime '%Y-%m-%d.%H:%M:%S',localtime;
 		info "creating super snapshot: $last"; 
@@ -295,6 +282,18 @@ sub deploy() {
 				rcmd $host => "sudo cp $f $trts{ $_->{ id } }{ rootdir }$f"
 					unless $copts{'dry-run'};
 			}
+
+			my @dirs = @{ $_->{ clean } // $proj->{ clean } // [qw( /tmp /var/log )] };
+			debug "cleaning directories: " .( join ',', @dirs ) if @dirs;
+			(my $jname) = split '@',$proj->{ super };
+			rcmd $proj->{ super } => "sudo ezjail-admin stop $jname"
+				unless $copts{'dry-run'};
+			for my $d ( @dirs ) {
+				rcmd $host => "sudo find $trts{ $_->{ id } }{ rootdir }$d -type f -delete"
+					unless $copts{'dry-run'};
+			}
+			rcmd $proj->{ super } => "sudo ezjail-admin start $jname"
+				unless $copts{'dry-run'};
 
 			my $meta = $_->{ meta } // $proj->{ meta } // '/etc/deploy.meta.yml';
 			debug "deploying meta file $meta" if $meta;
@@ -669,7 +668,6 @@ Deploy: apply super changes to group of instances
 Usage: deploy [options] project
 
 Options:
-    -c, --clean        clean /tmp and logs before sending snapshots
     -g, --group=NAME   explicitly set group to deploy
     -n, --dry-run      show what would have been done
 
