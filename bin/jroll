@@ -407,8 +407,11 @@ sub restart() {
 
 			if ( $trts{ $_->{ id } }{ running } ) {
 				debug "stopping $jail\@$host";
-				rcmd $host => "sudo ezjail-admin stop $jail"
-					unless $copts{'dry-run'};
+				unless ( $copts{'dry-run'} ) {
+					rcmd $host => "sudo ezjail-admin stop $jail";
+					debug "sleeping for 3 seconds...";
+					sleep 3;
+				}
 			} else {
 				debug "already stopped $jail\@$host";
 			}
