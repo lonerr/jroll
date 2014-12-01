@@ -172,7 +172,11 @@ sub deploy() {
 			$trts{ $_->{ id } }{ sweep } = [];
 
 			my $keep = $_->{ keep } // $proj->{ keep } // 23;
-			info "sweep disabled for $_->{ id }" unless $keep;
+			if ( $keep ) {
+				debug "keeping $keep last snapshots for $_->{ id }";
+			} else {
+				debug "sweep disabled for $_->{ id }";
+			}
 
 			local @_ = grep { /^jroll\.\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/ }
 			           @{ $trts{ $_->{ id } }{ snapshots } };
@@ -309,10 +313,13 @@ EOM
 				debug "dump keeped as pillar at $host";
 			}
 
-			my @swp = reverse @{ $trts{ $_->{ id } }{ sweep } };
-			for my $i ( 0 .. $#swp ) {
-				debug "destroying $swp[ $i ] at $_->{ id } [" . ( $i + 1 ) . "/" . ( $#swp + 1 ) . "]";
-				rcmd $host => "sudo zfs destroy $trts{ $_->{ id } }{ rootfs }\@$swp[ $i ]"
+			my @sss = reverse @{ $trts{ $_->{ id } }{ sweep } };
+			my @tss = reverse @{ $trts{ $_->{ id } }{ snapshots } };
+			info "sweeping out " . scalar( @sss ) . " from " . scalar( @tss ) . " snapshots at $_->{ id }"
+				if @sss;
+			for my $i ( 0 .. $#sss ) {
+				debug "destroying $sss[ $i ] at $_->{ id } [" . ( $i + 1 ) . "/" . ( $#sss + 1 ) . "]";
+				rcmd $host => "sudo zfs destroy $trts{ $_->{ id } }{ rootfs }\@$sss[ $i ]"
 					unless $copts{'dry-run'};
 			}
 		}
