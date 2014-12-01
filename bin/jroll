@@ -43,12 +43,10 @@ sub rcmd($$);
 sub rput($$$);
 
 # actions
-sub cleanup();
 sub deploy();
 sub help();
 
 my %cmds = (
-	cleanup => \&cleanup,
 	help    => \&help,
 	deploy  => \&deploy,
 	restart => \&restart,
@@ -97,67 +95,6 @@ sub help() {
 	goto &Help::main;
 }
 
-sub cleanup() {
-	my $start = time;
-
-	my %copts;
-	GetOptions(\%copts, qw(
-		dry-run|n
-		keep|k=i
-		group|g=s
-	)) or goto &Help::main;
-
-	# single argument required (project name)
-	my $pname = shift @ARGV or die &Help::cleanup;
-	goto &Help::cleanup if @ARGV;
-
-	fatal "not implemented yet";
-
-	info "dry-run process (read only)"
-		if $copts{'dry-run'};
-
-	# get project info
-	my $proj = $conf->{ projects }{ $pname } or
-		fatal "no project found: $pname";
-
-	# all members
-	my @all = sort map { @{ $proj->{ groups }{ $_ } } }
-		keys %{ $proj->{ groups } };
-
-	my $group = $copts{ group };
-
-	my $keep = $copts{ keep } // $proj->{ keep };
-	fatal "no 'keep' setting found, nothing to do"
-		unless $keep && $keep =~ /^\d+$/;
-	fatal "dangerous 'keep' settings '$keep' (3 minimum)"
-		unless $keep > 2;
-
-	my $mmbs = $group ? do {
-		$proj->{ groups }{ $group } or
-			fatal "no group '$group' defined for project";
-	} : \@all;
-
-	info "work on project '$pname', (" . ( $group // 'all groups' ) . ")";
-
-	# super info
-	info "discovering super info";
-	my $super = jinfo split '@',$proj->{ super };
-
-	# all suitable snapshots
-	my %every;
-	for my $m ( @all ) {
-		info "discovering member info ($m)";
-		my $inf = jinfo split('@',$m), matched => 0;
-		$every{ $_ }++ for @{ $inf->{ snapshots } };
-	}
-
-	# common snapshots
-	my @common = grep { $every{ $_ } == @all } keys %every;
-	info "found " . scalar( @common ) . " common snapshots";
-
-	fatal "TODO: real cleanup";
-}
-
 sub deploy() {
 	my $start = time;
 
@@ -165,6 +102,7 @@ sub deploy() {
 	GetOptions(\%copts, qw(
 		dry-run|n
 		group|g=s
+		sweep|w
 	)) or goto &Help::main;
 
 	# required arguments (projects)
@@ -228,6 +166,29 @@ sub deploy() {
 		}
 		fatal "no one common snapshot found"
 			unless $base;
+
+		info "analyzing snapshots to sweep out";
+		for ( @$mmbs ) {
+			$trts{ $_->{ id } }{ sweep } = [];
+
+			my $keep = $_->{ keep } // $proj->{ keep } // 23;
+			info "sweep disabled for $_->{ id }" unless $keep;
+
+			local @_ = grep { /^jroll\.\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/ }
+			           @{ $trts{ $_->{ id } }{ snapshots } };
+			# exclude base for extra safety
+			my @swp = grep { $_ ne $base } @_[ $keep .. $#_ ];
+
+			if ( $keep && $copts{ sweep } ) {
+				debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of used 'sweep' option";
+				$trts{ $_->{ id } }{ sweep } = \@swp;
+			} elsif ( $keep && $#swp > 2 * $keep ) {
+				debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of double excess 'keep' setting";
+				$trts{ $_->{ id } }{ sweep } = \@swp;
+			} else {
+				debug scalar( @swp ) . " snapshots will be keeped at $_->{ id }";
+			}
+		}
 
 		my @clean = @{ $_->{ clean } // $proj->{ clean } // [qw( /tmp /var/log )] };
 		if ( @clean ) {
@@ -346,6 +307,13 @@ EOM
 				debug "dump removed at $host";
 			} else {
 				debug "dump keeped as pillar at $host";
+			}
+
+			my @swp = reverse @{ $trts{ $_->{ id } }{ sweep } };
+			for my $i ( 0 .. $#swp ) {
+				debug "destroying $swp[ $i ] at $_->{ id } [" . ( $i + 1 ) . "/" . ( $#swp + 1 ) . "]";
+				rcmd $host => "sudo zfs destroy $trts{ $_->{ id } }{ rootfs }\@$swp[ $i ]"
+					unless $copts{'dry-run'};
 			}
 		}
 
@@ -544,10 +512,6 @@ sub jinfo(@) {
 		push @{ $inf->{ snapshots } }, ( split '@',$_ )[1];
 	}
 
-	# remove not suitable snapshots (if requested)
-	$inf->{ snapshots } = [ grep { /^jail\.\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/ } @{ $inf->{ snapshots } } ]
-		if $kws{ matched };
-
 	# prepare snapshots mapping
 	$inf->{ mss } = { map { $_ => $_ } @{ $inf->{ snapshots } } };
 	debug "got snapshots for $jail\@$host";
@@ -654,23 +618,6 @@ Available commands:
 EOM
 }
 
-# cleanup help
-sub cleanup {
-	die <<EOM;
-
-Cleanup: discard stale common jroll snapshots for group
-
-Usage:  cleanup [options] project
-
-Options:
-    -g, --group=NAME   explicitly set group to cleanup
-                       by default all groups will affected
-    -k, --keep=NUM     keep NUM last common snapshots
-    -n, --dry-run      show what would have been done
-
-EOM
-}
-
 # deploy help
 sub deploy {
 	die <<EOM;
@@ -682,6 +629,7 @@ Usage: deploy [options] project
 Options:
     -g, --group=NAME   explicitly set group to deploy
     -n, --dry-run      show what would have been done
+    -s, --sweep        force sweeping out
 
 EOM
 }
