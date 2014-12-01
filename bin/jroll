@@ -194,7 +194,7 @@ sub deploy() {
 			}
 		}
 
-		my @clean = @{ $_->{ clean } // $proj->{ clean } // [qw( /tmp /var/log )] };
+		my @clean = $proj->{ clean } // [qw( /tmp /var/log )] };
 		if ( @clean ) {
 			debug "stopping $super->{ jail }";
 			rcmd $proj->{ super } => "sudo ezjail-admin stop $super->{ jail }"
