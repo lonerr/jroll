@@ -186,7 +186,7 @@ sub deploy() {
 				debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of double excess 'keep' setting";
 				$trts{ $_->{ id } }{ sweep } = \@swp;
 			} else {
-				debug scalar( @swp ) . " snapshots will be keeped at $_->{ id }";
+				debug scalar( @swp ) . " snapshots will be kept at $_->{ id }";
 			}
 		}
 
