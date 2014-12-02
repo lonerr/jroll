@@ -102,11 +102,15 @@ sub deploy() {
 	GetOptions(\%copts, qw(
 		dry-run|n
 		group|g=s
+		no-sweep|W
 		sweep|w
 	)) or goto &Help::main;
 
 	# required arguments (projects)
 	goto &Help::deploy unless @ARGV;
+
+	fatal "options 'no-sweep' and 'sweep' are mutually exclusive"
+		if $copts{'no-sweep'} && $copts{ sweep };
 
 	for my $pname ( @ARGV ) {
 		info "dry-run process (read only)"
@@ -167,31 +171,35 @@ sub deploy() {
 		fatal "no one common snapshot found"
 			unless $base;
 
-		info "analyzing snapshots to sweep out";
-		for ( @$mmbs ) {
-			$trts{ $_->{ id } }{ sweep } = [];
+		unless ( $copts{'no-sweep'} ) {
+			info "analyzing snapshots to sweep out";
+			for ( @$mmbs ) {
+				$trts{ $_->{ id } }{ sweep } = [];
 
-			my $keep = $_->{ keep } // $proj->{ keep } // 23;
-			if ( $keep ) {
-				debug "keeping $keep last snapshots for $_->{ id }";
-			} else {
-				debug "sweep disabled for $_->{ id }";
+				my $keep = $_->{ keep } // $proj->{ keep } // 23;
+				if ( $keep ) {
+					debug "keeping $keep last snapshots for $_->{ id }";
+				} else {
+					debug "sweep disabled for $_->{ id }";
+				}
+
+				local @_ = grep { /^jroll\.\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/ }
+						   @{ $trts{ $_->{ id } }{ snapshots } };
+				# exclude base for extra safety
+				my @swp = grep { $_ ne $base } @_[ $keep .. $#_ ];
+
+				if ( $keep && $copts{ sweep } ) {
+					debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of used 'sweep' option";
+					$trts{ $_->{ id } }{ sweep } = \@swp;
+				} elsif ( $keep && $#swp > 2 * $keep ) {
+					debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of double excess 'keep' setting";
+					$trts{ $_->{ id } }{ sweep } = \@swp;
+				} else {
+					debug scalar( @swp ) . " snapshots will be kept at $_->{ id }";
+				}
 			}
-
-			local @_ = grep { /^jroll\.\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}$/ }
-			           @{ $trts{ $_->{ id } }{ snapshots } };
-			# exclude base for extra safety
-			my @swp = grep { $_ ne $base } @_[ $keep .. $#_ ];
-
-			if ( $keep && $copts{ sweep } ) {
-				debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of used 'sweep' option";
-				$trts{ $_->{ id } }{ sweep } = \@swp;
-			} elsif ( $keep && $#swp > 2 * $keep ) {
-				debug scalar( @swp ) . " snapshots will be removed at $_->{ id } because of double excess 'keep' setting";
-				$trts{ $_->{ id } }{ sweep } = \@swp;
-			} else {
-				debug scalar( @swp ) . " snapshots will be kept at $_->{ id }";
-			}
+		} else {
+			info "sweeping out forcefully disabled";
 		}
 
 		my @clean = @{ $proj->{ clean } // [qw( /tmp /var/log )] };
@@ -313,14 +321,16 @@ EOM
 				debug "dump keeped as pillar at $host";
 			}
 
-			my @sss = reverse @{ $trts{ $_->{ id } }{ sweep } };
-			my @tss = reverse @{ $trts{ $_->{ id } }{ snapshots } };
-			info "sweeping out " . scalar( @sss ) . " from " . scalar( @tss ) . " snapshots at $_->{ id }"
-				if @sss;
-			for my $i ( 0 .. $#sss ) {
-				debug "destroying $sss[ $i ] at $_->{ id } [" . ( $i + 1 ) . "/" . ( $#sss + 1 ) . "]";
-				rcmd $host => "sudo zfs destroy $trts{ $_->{ id } }{ rootfs }\@$sss[ $i ]"
-					unless $copts{'dry-run'};
+			unless ( $copts{'no-sweep'} ) {
+				my @sss = reverse @{ $trts{ $_->{ id } }{ sweep } };
+				my @tss = reverse @{ $trts{ $_->{ id } }{ snapshots } };
+				info "sweeping out " . scalar( @sss ) . " from " . scalar( @tss ) . " snapshots at $_->{ id }"
+					if @sss;
+				for my $i ( 0 .. $#sss ) {
+					debug "destroying $sss[ $i ] at $_->{ id } [" . ( $i + 1 ) . "/" . ( $#sss + 1 ) . "]";
+					rcmd $host => "sudo zfs destroy $trts{ $_->{ id } }{ rootfs }\@$sss[ $i ]"
+						unless $copts{'dry-run'};
+				}
 			}
 		}
 
