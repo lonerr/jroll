@@ -563,7 +563,7 @@ sub inactive($) {
 	}
 
 	if ( my $x = $proj->{ inactive } ) {
-		return $x unless $x =~ m{^http://}; # plain group name
+		return $x unless $x =~ m{^https?://}; # plain group name
 
 		info "detecting inactive group via http (using 'inactive')";
 		my $ua = LWP::UserAgent->new( timeout => 10 );
